@@ -79,17 +79,6 @@ EOF
         fi
     fi
 
-    if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
-        echo "ERROR: cert files not found in mounted R2 bucket:"
-        echo "  cert: $CERT"
-        echo "  key:  $KEY"
-        ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (mount dir is empty or not accessible)"
-        exit 1
-    fi
-
-    echo "Cert: $CERT"
-    echo "Key:  $KEY"
-
     # 3. Renew cert via certbot if it expires within 30 days (or doesn't exist yet).
     # Requires: CERTBOT_DOMAIN, CERTBOT_EMAIL
     # Requires port 80 to be open for the ACME standalone HTTP challenge.
@@ -111,10 +100,24 @@ EOF
             rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
             rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
             echo "Renewed certs written to R2."
+
+            # Give tigrisfs a moment to reflect the newly uploaded objects
+            sleep 3
         else
             echo "Cert is valid for more than 30 days, skipping renewal."
         fi
     fi
+
+    if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
+        echo "ERROR: cert files not found after all attempts:"
+        echo "  cert: $CERT"
+        echo "  key:  $KEY"
+        ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (mount dir is empty or not accessible)"
+        exit 1
+    fi
+
+    echo "Cert: $CERT"
+    echo "Key:  $KEY"
 
     export MOQ_SERVER_TLS_CERT="$CERT"
     export MOQ_SERVER_TLS_KEY="$KEY"
