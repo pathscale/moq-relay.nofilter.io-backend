@@ -41,6 +41,17 @@ if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACC
     export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
     export AWS_ENDPOINT_URL="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
+    # rclone is used for reliable writes to R2 (tigrisfs is read-only mount only)
+    mkdir -p /root/.config/rclone
+    cat > /root/.config/rclone/rclone.conf <<EOF
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = ${R2_ACCESS_KEY_ID}
+secret_access_key = ${R2_SECRET_ACCESS_KEY}
+endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+EOF
+
     echo "Mounting R2 bucket: ${R2_BUCKET_NAME} -> ${CERT_MOUNT}"
     tigrisfs "${R2_BUCKET_NAME}" "${CERT_MOUNT}" &
     sleep 3
@@ -60,8 +71,8 @@ if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACC
 
         if [ -n "$VOLUME_CERT_DIR" ] && [ -f "${VOLUME_CERT_DIR}/fullchain.pem" ] && [ -f "${VOLUME_CERT_DIR}/privkey.pem" ]; then
             echo "Seeding R2 from volume: ${VOLUME_CERT_DIR}"
-            cp -L "${VOLUME_CERT_DIR}/fullchain.pem" "$CERT"
-            cp -L "${VOLUME_CERT_DIR}/privkey.pem" "$KEY"
+            rclone copyto -L "${VOLUME_CERT_DIR}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
+            rclone copyto -L "${VOLUME_CERT_DIR}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
             echo "Certs seeded into R2."
         else
             echo "WARNING: volume cert files not found at ${VOLUME_CERT_DIR:-/run/letsencrypt/live/<domain>}, skipping seed"
@@ -96,9 +107,9 @@ if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACC
                 --email "$CERTBOT_EMAIL" \
                 --non-interactive --agree-tos
 
-            # Copy renewed certs back to R2 mount so all nodes pick them up
-            cp -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "$CERT"
-            cp -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem" "$KEY"
+            # Copy renewed certs back to R2 so all nodes pick them up
+            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
+            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
             echo "Renewed certs written to R2."
         else
             echo "Cert is valid for more than 30 days, skipping renewal."
