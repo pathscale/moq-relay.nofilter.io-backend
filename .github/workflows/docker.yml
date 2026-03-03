@@ -4,62 +4,40 @@ on:
   push:
     tags:
       - 'moq-relay-v*'
-      - 'moq-clock-v*'
-      # NOTE: The -cli is automatically removed
-      - 'moq-cli-v*'
-      - 'moq-token-cli-v*'
-
-env:
-  REGISTRY: docker.io/kixelated
+  workflow_dispatch:
 
 jobs:
   deploy:
     name: Release
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      # Figure out the docker image based on the tag
-      - id: parse
-        run: |
-          ref=${GITHUB_REF#refs/tags/}
-          if [[ "$ref" =~ ^([a-z-]+)-v([0-9.]+)$ ]]; then
-            full_target="${BASH_REMATCH[1]}"
-            version="${BASH_REMATCH[2]}"
-            # Strip "-cli" suffix from target if present
-            target="${full_target%-cli}"
-            echo "target=$target" >> $GITHUB_OUTPUT
-            echo "version=$version" >> $GITHUB_OUTPUT
-          else
-            echo "Tag format not recognized." >&2
-            exit 1
-          fi
+      - name: Compute image name
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/moq-relay" >> $GITHUB_ENV
 
-      # I'm paying for Depot for faster ARM builds.
-      - uses: depot/setup-action@v1
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF#refs/tags/moq-relay-v}" >> $GITHUB_ENV
 
-      # Login to docker.io
+      - uses: docker/setup-buildx-action@v3
+
       - uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push multi-arch Docker images using Depot
-      - uses: depot/build-push-action@v1
+      - uses: docker/build-push-action@v6
         with:
-          project: r257ctfqm6
           context: .
           push: true
-          # Make a smaller image by specifying the package to build
-          build-args: |
-            package=${{ steps.parse.outputs.target }}
           tags: |
-            ${{ env.REGISTRY }}/${{ steps.parse.outputs.target }}:${{ steps.parse.outputs.version }}
-            ${{ env.REGISTRY }}/${{ steps.parse.outputs.target }}:latest
-          platforms: linux/amd64,linux/arm64
+            ${{ env.IMAGE }}:${{ env.VERSION }}
+            ${{ env.IMAGE }}:latest
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
