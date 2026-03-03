@@ -60,9 +60,11 @@ if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACC
 
         if [ -n "$VOLUME_CERT_DIR" ] && [ -f "${VOLUME_CERT_DIR}/fullchain.pem" ] && [ -f "${VOLUME_CERT_DIR}/privkey.pem" ]; then
             echo "Seeding R2 from volume: ${VOLUME_CERT_DIR}"
-            cp "${VOLUME_CERT_DIR}/fullchain.pem" "$CERT"
-            cp "${VOLUME_CERT_DIR}/privkey.pem" "$KEY"
+            cp -L "${VOLUME_CERT_DIR}/fullchain.pem" "$CERT"
+            cp -L "${VOLUME_CERT_DIR}/privkey.pem" "$KEY"
             echo "Certs seeded into R2."
+        else
+            echo "WARNING: volume cert files not found at ${VOLUME_CERT_DIR:-/run/letsencrypt/live/<domain>}, skipping seed"
         fi
     fi
 
@@ -95,8 +97,8 @@ if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACC
                 --non-interactive --agree-tos
 
             # Copy renewed certs back to R2 mount so all nodes pick them up
-            cp "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "$CERT"
-            cp "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem" "$KEY"
+            cp -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "$CERT"
+            cp -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem" "$KEY"
             echo "Renewed certs written to R2."
         else
             echo "Cert is valid for more than 30 days, skipping renewal."
