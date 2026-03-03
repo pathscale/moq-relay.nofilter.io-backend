@@ -1,11 +1,6 @@
 #!/bin/bash
 set -e
 
-CERTBOT_LOG=/var/log/letsencrypt/letsencrypt.log
-
-# On any failure, dump the certbot log if it exists so the cause is visible
-trap 'if [ -f "$CERTBOT_LOG" ]; then echo "--- certbot log ---"; cat "$CERTBOT_LOG"; fi' ERR
-
 # 1. Fetch the Anycast IP from BunnyCDN and update the DNS A record.
 # Requires: BUNNY_APIKEY, BUNNY_APP_ID, BUNNY_ZONEID, BUNNY_RECORDID, DNS_SUBDOMAIN
 if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] && [ -n "$BUNNY_RECORDID" ] && [ -n "$DNS_SUBDOMAIN" ]; then
@@ -34,33 +29,79 @@ if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] &&
     fi
 fi
 
-# Obtain/renew TLS certificate via certbot standalone HTTP challenge.
-# Requires port 80 to be open and the domain's A record to already point at this host.
-if [ -n "$CERTBOT_DOMAIN" ] && [ -n "$CERTBOT_EMAIL" ]; then
-    CERT_DIR="/run/letsencrypt"
+# 2. Mount the R2 bucket containing TLS certs via tigrisfs (S3-compatible FUSE).
+# Requires: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
+# Optional: R2_CERT_FILE (default: fullchain.pem), R2_KEY_FILE (default: privkey.pem)
+if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET_NAME" ]; then
+    CERT_MOUNT="/mnt/r2"
+    mkdir -p "$CERT_MOUNT"
 
-    certbot certonly \
-        --standalone \
-        --config-dir "$CERT_DIR" \
-        ${CERTBOT_STAGING:+--staging -vvv} \
-        -d "$CERTBOT_DOMAIN" \
-        --email "$CERTBOT_EMAIL" \
-        --non-interactive --agree-tos \
-        --keep-until-expiring
+    # tigrisfs uses standard AWS SDK env var names internally
+    export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+    export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+    export AWS_ENDPOINT_URL="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
 
-    CERT="${CERT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem"
-    KEY="${CERT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"
+    echo "Mounting R2 bucket: ${R2_BUCKET_NAME} -> ${CERT_MOUNT}"
+    tigrisfs "${R2_BUCKET_NAME}" "${CERT_MOUNT}" &
+    sleep 3
+
+    CERT="${CERT_MOUNT}/${R2_CERT_FILE:-fullchain.pem}"
+    KEY="${CERT_MOUNT}/${R2_KEY_FILE:-privkey.pem}"
+
+    # Seed R2 from the BunnyCDN volume mount at /run/letsencrypt if R2 is empty.
+    # This is a one-time bootstrap: once R2 has certs this block is a no-op.
+    if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
+        # Prefer CERTBOT_DOMAIN if set, otherwise discover the first live directory
+        if [ -n "$CERTBOT_DOMAIN" ]; then
+            VOLUME_CERT_DIR="/run/letsencrypt/live/${CERTBOT_DOMAIN}"
+        else
+            VOLUME_CERT_DIR=$(find /run/letsencrypt/live -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
+        fi
+
+        if [ -n "$VOLUME_CERT_DIR" ] && [ -f "${VOLUME_CERT_DIR}/fullchain.pem" ] && [ -f "${VOLUME_CERT_DIR}/privkey.pem" ]; then
+            echo "Seeding R2 from volume: ${VOLUME_CERT_DIR}"
+            cp "${VOLUME_CERT_DIR}/fullchain.pem" "$CERT"
+            cp "${VOLUME_CERT_DIR}/privkey.pem" "$KEY"
+            echo "Certs seeded into R2."
+        fi
+    fi
 
     if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
-        echo "ERROR: cert files not found after certbot:"
+        echo "ERROR: cert files not found in mounted R2 bucket:"
         echo "  cert: $CERT"
         echo "  key:  $KEY"
-        ls -la "${CERT_DIR}/live/" 2>/dev/null || echo "  (live/ dir does not exist)"
+        ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (mount dir is empty or not accessible)"
         exit 1
     fi
 
     echo "Cert: $CERT"
     echo "Key:  $KEY"
+
+    # 3. Renew cert via certbot if it expires within 30 days (or doesn't exist yet).
+    # Requires: CERTBOT_DOMAIN, CERTBOT_EMAIL
+    # Requires port 80 to be open for the ACME standalone HTTP challenge.
+    if [ -n "$CERTBOT_DOMAIN" ] && [ -n "$CERTBOT_EMAIL" ]; then
+        RENEW_THRESHOLD=$((30 * 24 * 3600))
+        if [ ! -f "$CERT" ] || ! openssl x509 -checkend "$RENEW_THRESHOLD" -noout -in "$CERT" 2>/dev/null; then
+            echo "Cert missing or expires within 30 days — running certbot..."
+            CERTBOT_DIR="/run/letsencrypt"
+
+            certbot certonly \
+                --standalone \
+                --config-dir "$CERTBOT_DIR" \
+                ${CERTBOT_STAGING:+--staging} \
+                -d "$CERTBOT_DOMAIN" \
+                --email "$CERTBOT_EMAIL" \
+                --non-interactive --agree-tos
+
+            # Copy renewed certs back to R2 mount so all nodes pick them up
+            cp "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "$CERT"
+            cp "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem" "$KEY"
+            echo "Renewed certs written to R2."
+        else
+            echo "Cert is valid for more than 30 days, skipping renewal."
+        fi
+    fi
 
     export MOQ_SERVER_TLS_CERT="$CERT"
     export MOQ_SERVER_TLS_KEY="$KEY"

@@ -29,8 +29,16 @@ RUN cargo build --release -p moq-relay && cp target/release/moq-relay /output
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl certbot jq && \
+    apt-get install -y --no-install-recommends curl jq ca-certificates fuse3 certbot openssl && \
     rm -rf /var/lib/apt/lists/*
+
+# Install tigrisfs — lightweight S3-compatible FUSE adapter
+RUN ARCH=$(uname -m) && \
+    TIGRISFS_VER=$(curl -sf "https://api.github.com/repos/tigrisdata/tigrisfs/releases/latest" | \
+        grep '"tag_name"' | head -1 | sed 's/.*"tag_name": "v\([^"]*\)".*/\1/') && \
+    curl -fsSL "https://github.com/tigrisdata/tigrisfs/releases/download/v${TIGRISFS_VER}/tigrisfs_${TIGRISFS_VER}_Linux_${ARCH}.tar.gz" | \
+    tar -xz -C /usr/local/bin tigrisfs && \
+    chmod +x /usr/local/bin/tigrisfs
 
 COPY --from=builder /output /usr/local/bin/moq-relay
 COPY rs/moq-relay/entrypoint.sh /usr/local/bin/entrypoint.sh
