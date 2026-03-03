@@ -9,7 +9,7 @@ on:
 jobs:
   deploy:
     name: Release
-    runs-on: ubuntu-latest
+    runs-on: buildjet-8vcpu-ubuntu-2204
     permissions:
       contents: read
       packages: write
