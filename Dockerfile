@@ -29,7 +29,7 @@ RUN cargo build --release -p moq-relay && cp target/release/moq-relay /output
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl jq ca-certificates fuse3 certbot openssl && \
+    apt-get install -y --no-install-recommends curl jq ca-certificates fuse3 certbot openssl rclone && \
     rm -rf /var/lib/apt/lists/*
 
 # Install tigrisfs — lightweight S3-compatible FUSE adapter
