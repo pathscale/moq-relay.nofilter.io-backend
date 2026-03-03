@@ -1,43 +1,39 @@
-# We're using a Dockerfile despite the fact that Nix can create Docker images directly.
-#
-# 1. It's difficult to cross compile Docker images with Nix.
-#   - I tried, but OSX makes it even more difficult.
-# 2. Nix is not required for developers; `docker build .` will work.
-#
-# Unfortunately, it means that caching is more difficult.
-# Nix uses /nix/store for both caching AND the final output (lots of symlinks)
-FROM nixos/nix:latest AS builder
-ENV NIX_CONFIG="experimental-features = nix-command flakes"
+FROM lukemathwalker/cargo-chef:latest-rust-bookworm AS chef
 
 WORKDIR /build
 
-RUN mkdir -p /output/store
+# Install the toolchain components early so this layer is cached independently
+# of source changes. Only re-runs when rust-toolchain.toml changes.
+COPY rust-toolchain.toml .
+RUN rustup show
+
+# --- Planner: generate a dependency recipe from Cargo.toml/Cargo.lock ---
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# --- Builder: cook deps (cached), then build the binary ---
+FROM chef AS builder
+
+# cmake and clang are required by aws-lc-rs (statically linked TLS)
+RUN apt-get update && apt-get install -y cmake clang pkg-config && rm -rf /var/lib/apt/lists/*
+
+COPY --from=planner /build/recipe.json recipe.json
+# Only cook moq-relay's transitive deps — not the whole workspace
+RUN cargo chef cook --release -p moq-relay --recipe-path recipe.json
 
 COPY . .
+RUN cargo build --release -p moq-relay && cp target/release/moq-relay /output
 
-# Build stage that accepts an optional package argument
-ARG package
+# --- Runtime ---
+FROM debian:bookworm-slim
 
-# Build the package
-RUN --mount=type=cache,target=/root/.cache --mount=type=cache,target=/nix,from=nixos/nix:latest,source=/nix \
-	nix build .#${package} --out-link result && \
-	cp -r $(nix-store -qR result) /output/store && \
-	cp -r $(readlink -f result) /output/result && \
-	rm -rf /output/store/$(basename $(readlink -f result))
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl certbot jq && \
+    rm -rf /var/lib/apt/lists/*
 
-# Default to `/bin/sh` for the entrypoint if no package is specified
-ARG package="sh"
+COPY --from=builder /output /usr/local/bin/moq-relay
+COPY rs/moq-relay/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# Create entry.sh script that knows which binary to run
-RUN echo '#!/bin/sh' > /output/entry.sh && \
-	echo "exec /bin/${package} \"\$@\"" >> /output/entry.sh && \
-	chmod +x /output/entry.sh
-
-# Final image (when no specific package is selected, defaults to sh)
-FROM nixos/nix:latest
-
-COPY --from=builder /output/entry.sh /bin/entry.sh
-COPY --from=builder /output/store /nix/store
-COPY --from=builder /output/result/bin/* /bin/
-
-ENTRYPOINT ["/bin/entry.sh"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
