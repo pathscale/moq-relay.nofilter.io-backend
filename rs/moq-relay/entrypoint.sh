@@ -35,15 +35,15 @@ if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] &&
     fi
 fi
 
-# 2. Mount the R2 bucket containing TLS certs via rclone FUSE.
+# 2. Download TLS certs from R2 via rclone (no FUSE required).
 # Requires: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
 # Optional: R2_CERT_FILE (default: fullchain.pem), R2_KEY_FILE (default: privkey.pem)
 if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET_NAME" ]; then
     echo "entrypoint: entering R2 block"
-    CERT_MOUNT="/mnt/r2"
-    mkdir -p "$CERT_MOUNT"
+    CERT_DIR="/certs"
+    mkdir -p "$CERT_DIR"
 
-    # rclone handles both the FUSE mount (reads) and direct uploads (writes)
+    # rclone handles both direct downloads (reads) and uploads (writes)
     mkdir -p /root/.config/rclone
     cat > /root/.config/rclone/rclone.conf <<EOF
 [r2]
@@ -55,38 +55,15 @@ endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
 no_check_bucket = true
 EOF
 
-    echo "Mounting R2 bucket: ${R2_BUCKET_NAME} -> ${CERT_MOUNT}"
-    rclone mount r2:"${R2_BUCKET_NAME}" "${CERT_MOUNT}" \
-        --vfs-cache-mode full \
-        --dir-cache-time 0 \
-        --allow-non-empty &
-    sleep 3
+    CERT="${CERT_DIR}/${R2_CERT_FILE:-fullchain.pem}"
+    KEY="${CERT_DIR}/${R2_KEY_FILE:-privkey.pem}"
 
-    echo "--- R2 mount initial listing (${CERT_MOUNT}) ---"
-    ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (not accessible)"
+    echo "Downloading certs from R2: ${R2_BUCKET_NAME}"
+    rclone copyto "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}" "$CERT" 2>/dev/null || true
+    rclone copyto "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}" "$KEY" 2>/dev/null || true
 
-    CERT="${CERT_MOUNT}/${R2_CERT_FILE:-fullchain.pem}"
-    KEY="${CERT_MOUNT}/${R2_KEY_FILE:-privkey.pem}"
-
-    # Seed R2 from the BunnyCDN volume mount at /run/letsencrypt if R2 is empty.
-    # This is a one-time bootstrap: once R2 has certs this block is a no-op.
-    if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
-        # Prefer CERTBOT_DOMAIN if set, otherwise discover the first live directory
-        if [ -n "$CERTBOT_DOMAIN" ]; then
-            VOLUME_CERT_DIR="/run/letsencrypt/live/${CERTBOT_DOMAIN}"
-        else
-            VOLUME_CERT_DIR=$(find /run/letsencrypt/live -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
-        fi
-
-        if [ -n "$VOLUME_CERT_DIR" ] && [ -f "${VOLUME_CERT_DIR}/fullchain.pem" ] && [ -f "${VOLUME_CERT_DIR}/privkey.pem" ]; then
-            echo "Seeding R2 from volume: ${VOLUME_CERT_DIR}"
-            rclone copyto -L "${VOLUME_CERT_DIR}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
-            rclone copyto -L "${VOLUME_CERT_DIR}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
-            echo "Certs seeded into R2."
-        else
-            echo "WARNING: volume cert files not found at ${VOLUME_CERT_DIR:-/run/letsencrypt/live/<domain>}, skipping seed"
-        fi
-    fi
+    echo "--- certs (${CERT_DIR}) ---"
+    ls -la "${CERT_DIR}/" 2>/dev/null || echo "  (not accessible)"
 
     # 3. Renew cert via certbot if it expires within 30 days (or doesn't exist yet).
     # Requires: CERTBOT_DOMAIN, CERTBOT_EMAIL
@@ -119,8 +96,6 @@ EOF
         fi
     fi
 
-    echo "--- R2 mount (${CERT_MOUNT}) ---"
-    ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (not accessible)"
     echo "--- /run/letsencrypt ---"
     find /run/letsencrypt -type f 2>/dev/null || echo "  (empty or not mounted)"
 
