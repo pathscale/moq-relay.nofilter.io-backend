@@ -69,6 +69,63 @@ just dev
 Then visit [http://localhost:5173](http://localhost:5173) to see the demo.
 
 
+## Docker Deployment
+
+The repository includes a production `Dockerfile` that builds `moq-relay` and packages it with an entrypoint that handles DNS updates, TLS certificate management, and startup.
+
+The entrypoint performs three steps in order:
+
+1. **DNS update** — fetches the BunnyCDN anycast IP and updates the configured DNS record.
+2. **R2 mount** — mounts a Cloudflare R2 bucket via FUSE ([tigrisfs](https://github.com/tigrisdata/tigrisfs)) to provide TLS certificates at `/mnt/r2`.
+3. **Certificate renewal** — if `CERTBOT_DOMAIN` is set, checks whether the mounted cert expires within 30 days. If so, runs certbot (standalone HTTP challenge on port 80) and writes the renewed cert back to the R2 mount so all nodes share it automatically.
+
+Each step is optional and only runs when its required environment variables are present.
+
+> **FUSE requirement:** The container needs `/dev/fuse` access and `SYS_ADMIN` capability for the R2 mount. On self-managed Docker hosts add `--device /dev/fuse --cap-add SYS_ADMIN` to the run command. On managed container platforms (e.g. BunnyCDN Magic Containers) check whether FUSE is supported.
+
+### Environment Variables
+
+**BunnyCDN DNS update**
+
+| Variable | Required | Description |
+|---|---|---|
+| `BUNNY_APIKEY` | Yes | BunnyCDN API key |
+| `BUNNY_APP_ID` | Yes | Magic Containers app ID |
+| `BUNNY_ZONEID` | Yes | DNS zone ID |
+| `BUNNY_RECORDID` | Yes | DNS record ID to update |
+| `DNS_SUBDOMAIN` | Yes | Subdomain name for the A record |
+
+**R2 certificate mount**
+
+| Variable | Required | Description |
+|---|---|---|
+| `R2_ACCOUNT_ID` | Yes | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | Yes | R2 API token access key ID |
+| `R2_SECRET_ACCESS_KEY` | Yes | R2 API token secret access key |
+| `R2_BUCKET_NAME` | Yes | R2 bucket containing the cert files |
+| `R2_CERT_FILE` | No | Path to cert inside the bucket (default: `fullchain.pem`) |
+| `R2_KEY_FILE` | No | Path to key inside the bucket (default: `privkey.pem`) |
+
+**Certificate renewal via certbot**
+
+| Variable | Required | Description |
+|---|---|---|
+| `CERTBOT_DOMAIN` | Yes | Domain to issue/renew the certificate for |
+| `CERTBOT_EMAIL` | Yes | Contact email for Let's Encrypt notifications |
+| `CERTBOT_STAGING` | No | Set to any non-empty value to use the Let's Encrypt staging environment |
+
+> **Port 80:** Certbot uses the standalone HTTP challenge, so port 80 must be publicly reachable on the node when a renewal fires.
+
+### R2 bucket setup
+
+1. Create an R2 bucket (e.g. `moq-relay-certs`) in the Cloudflare dashboard.
+2. Create an R2 API token with **Object Read & Write** permission scoped to that bucket. Copy the access key ID and secret — the secret is only shown once.
+3. On first deploy, either upload an existing `fullchain.pem` / `privkey.pem` to the bucket root, or leave the bucket empty and let certbot populate it on first startup.
+4. Set all required environment variables in your container config. Mark `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` as secrets.
+
+Subsequent container restarts will skip certbot unless the cert is within 30 days of expiry. When a renewal does run, the updated files are written back to R2 and all nodes will use them on their next restart.
+
+
 ## Architecture
 
 MoQ is designed as a layered protocol stack.
