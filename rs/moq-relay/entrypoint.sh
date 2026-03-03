@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+echo "entrypoint: starting"
+echo "  R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-<unset>}"
+echo "  R2_BUCKET_NAME=${R2_BUCKET_NAME:-<unset>}"
+echo "  CERTBOT_DOMAIN=${CERTBOT_DOMAIN:-<unset>}"
+echo "  BUNNY_APIKEY=${BUNNY_APIKEY:+<set>}"
+
 # 1. Fetch the Anycast IP from BunnyCDN and update the DNS A record.
 # Requires: BUNNY_APIKEY, BUNNY_APP_ID, BUNNY_ZONEID, BUNNY_RECORDID, DNS_SUBDOMAIN
 if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] && [ -n "$BUNNY_RECORDID" ] && [ -n "$DNS_SUBDOMAIN" ]; then
@@ -29,19 +35,15 @@ if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] &&
     fi
 fi
 
-# 2. Mount the R2 bucket containing TLS certs via tigrisfs (S3-compatible FUSE).
+# 2. Mount the R2 bucket containing TLS certs via rclone FUSE.
 # Requires: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
 # Optional: R2_CERT_FILE (default: fullchain.pem), R2_KEY_FILE (default: privkey.pem)
 if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET_NAME" ]; then
+    echo "entrypoint: entering R2 block"
     CERT_MOUNT="/mnt/r2"
     mkdir -p "$CERT_MOUNT"
 
-    # tigrisfs uses standard AWS SDK env var names internally
-    export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-    export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-    export AWS_ENDPOINT_URL="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-
-    # rclone is used for reliable writes to R2 (tigrisfs is read-only mount only)
+    # rclone handles both the FUSE mount (reads) and direct uploads (writes)
     mkdir -p /root/.config/rclone
     cat > /root/.config/rclone/rclone.conf <<EOF
 [r2]
@@ -50,11 +52,18 @@ provider = Cloudflare
 access_key_id = ${R2_ACCESS_KEY_ID}
 secret_access_key = ${R2_SECRET_ACCESS_KEY}
 endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+no_check_bucket = true
 EOF
 
     echo "Mounting R2 bucket: ${R2_BUCKET_NAME} -> ${CERT_MOUNT}"
-    tigrisfs "${R2_BUCKET_NAME}" "${CERT_MOUNT}" &
+    rclone mount r2:"${R2_BUCKET_NAME}" "${CERT_MOUNT}" \
+        --vfs-cache-mode full \
+        --dir-cache-time 0 \
+        --allow-non-empty &
     sleep 3
+
+    echo "--- R2 mount initial listing (${CERT_MOUNT}) ---"
+    ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (not accessible)"
 
     CERT="${CERT_MOUNT}/${R2_CERT_FILE:-fullchain.pem}"
     KEY="${CERT_MOUNT}/${R2_KEY_FILE:-privkey.pem}"
@@ -88,8 +97,13 @@ EOF
             echo "Cert missing or expires within 30 days — running certbot..."
             CERTBOT_DIR="/run/letsencrypt"
 
+            BUNNY_CREDENTIALS="/run/bunny-credentials.ini"
+            echo "dns_bunny_api_key = ${BUNNY_APIKEY}" > "$BUNNY_CREDENTIALS"
+            chmod 600 "$BUNNY_CREDENTIALS"
+
             certbot certonly \
-                --standalone \
+                --authenticator dns-bunny \
+                --dns-bunny-credentials "$BUNNY_CREDENTIALS" \
                 --config-dir "$CERTBOT_DIR" \
                 ${CERTBOT_STAGING:+--staging} \
                 -d "$CERTBOT_DOMAIN" \
@@ -100,19 +114,20 @@ EOF
             rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
             rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
             echo "Renewed certs written to R2."
-
-            # Give tigrisfs a moment to reflect the newly uploaded objects
-            sleep 3
         else
             echo "Cert is valid for more than 30 days, skipping renewal."
         fi
     fi
 
+    echo "--- R2 mount (${CERT_MOUNT}) ---"
+    ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (not accessible)"
+    echo "--- /run/letsencrypt ---"
+    find /run/letsencrypt -type f 2>/dev/null || echo "  (empty or not mounted)"
+
     if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
         echo "ERROR: cert files not found after all attempts:"
         echo "  cert: $CERT"
         echo "  key:  $KEY"
-        ls -la "${CERT_MOUNT}/" 2>/dev/null || echo "  (mount dir is empty or not accessible)"
         exit 1
     fi
 
@@ -126,4 +141,5 @@ EOF
 fi
 
 echo "Starting moq-relay..."
+echo "entrypoint: exec moq-relay with MOQ_SERVER_TLS_CERT=${MOQ_SERVER_TLS_CERT:-<unset>}"
 exec /usr/local/bin/moq-relay "$@"
