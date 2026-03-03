@@ -76,12 +76,10 @@ The repository includes a production `Dockerfile` that builds `moq-relay` and pa
 The entrypoint performs three steps in order:
 
 1. **DNS update** — fetches the BunnyCDN anycast IP and updates the configured DNS record.
-2. **R2 mount** — mounts a Cloudflare R2 bucket via FUSE ([tigrisfs](https://github.com/tigrisdata/tigrisfs)) to provide TLS certificates at `/mnt/r2`.
-3. **Certificate renewal** — if `CERTBOT_DOMAIN` is set, checks whether the mounted cert expires within 30 days. If so, runs certbot (standalone HTTP challenge on port 80) and writes the renewed cert back to the R2 mount so all nodes share it automatically.
+2. **R2 download** — downloads TLS certificates directly from Cloudflare R2 via rclone (no FUSE required).
+3. **Certificate renewal** — if `CERTBOT_DOMAIN` is set, checks whether the downloaded cert expires within 30 days. If so, runs certbot using the BunnyCDN DNS challenge (no port 80 required) and writes the renewed cert back to R2 via rclone so all nodes share it automatically.
 
 Each step is optional and only runs when its required environment variables are present.
-
-> **FUSE requirement:** The container needs `/dev/fuse` access and `SYS_ADMIN` capability for the R2 mount. On self-managed Docker hosts add `--device /dev/fuse --cap-add SYS_ADMIN` to the run command. On managed container platforms (e.g. BunnyCDN Magic Containers) check whether FUSE is supported.
 
 ### Environment Variables
 
@@ -114,7 +112,7 @@ Each step is optional and only runs when its required environment variables are 
 | `CERTBOT_EMAIL` | Yes | Contact email for Let's Encrypt notifications |
 | `CERTBOT_STAGING` | No | Set to any non-empty value to use the Let's Encrypt staging environment |
 
-> **Port 80:** Certbot uses the standalone HTTP challenge, so port 80 must be publicly reachable on the node when a renewal fires.
+> **DNS challenge:** Certbot uses the BunnyCDN DNS-01 challenge via `BUNNY_APIKEY` (shared with the DNS update step). No port 80 required.
 
 ### R2 bucket setup
 
