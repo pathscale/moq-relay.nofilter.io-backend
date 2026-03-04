@@ -115,12 +115,12 @@ Each step is optional and only runs when its required environment variables are 
 
 > **DNS challenge:** Certbot uses the BunnyCDN DNS-01 challenge via `BUNNY_APIKEY` (shared with the DNS update step). No port 80 required.
 
-### R2 bucket setup
+### S3-compatible storage setup
 
-1. Create an R2 bucket (e.g. `moq-relay-certs`) in the Cloudflare dashboard.
-2. Create an R2 API token with **Object Read & Write** permission scoped to that bucket. Copy the access key ID and secret — the secret is only shown once.
-3. On first deploy, either upload an existing `fullchain.pem` / `privkey.pem` to the bucket root, or leave the bucket empty and let certbot populate it on first startup.
-4. Set all required environment variables in your container config. Mark `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` as secrets.
+1. Create a bucket in your S3-compatible storage provider (e.g. a Cloudflare R2 bucket).
+2. Create an API token with **Object Read & Write** permission scoped to that bucket. Copy the access key ID and secret — the secret is only shown once.
+3. On first deploy, either upload an existing `fullchain.pem` / `privkey.pem` under your chosen `S3_PREFIX`, or leave the bucket empty and let certbot populate it on first startup.
+4. Set all required environment variables in your container config. Mark `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` as secrets.
 
 Subsequent container restarts will skip certbot unless the cert is within 30 days of expiry. When a renewal does run, the updated files are written back to R2 and all nodes will use them on their next restart.
 
