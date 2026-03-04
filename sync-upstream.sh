@@ -21,3 +21,12 @@ if [[ "$response" =~ ^[Yy]$ ]]; then
 else
     echo "Aborted."
 fi
+
+read -rp "Force push to origin? [y/N] " response
+
+if [[ "$response" =~ ^[Yy]$ ]]; then
+    git push origin master --force-with-lease
+    echo "Done."
+else
+    echo "Aborted."
+fi
