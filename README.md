@@ -83,34 +83,35 @@ Each step is optional and only runs when its required environment variables are 
 
 ### Environment Variables
 
-**BunnyCDN DNS update**
+**Required**
 
-| Variable | Required | Description |
+| Variable | Description |
+|---|---|
+| `S3_ENDPOINT` | S3-compatible endpoint URL (e.g. `https://<id>.r2.cloudflarestorage.com`) |
+| `S3_ACCESS_KEY_ID` | S3 API token access key ID |
+| `S3_SECRET_ACCESS_KEY` | S3 API token secret access key |
+| `S3_BUCKET_NAME` | S3 bucket containing the cert files |
+| `S3_PREFIX` | Subdirectory prefix within the bucket |
+| `BUNNY_APIKEY` | BunnyCDN API key |
+| `BUNNY_APP_ID` | Magic Containers app ID |
+| `BUNNY_ZONEID` | DNS zone ID |
+| `BUNNY_RECORDID` | DNS record ID to update |
+| `DNS_SUBDOMAIN` | Subdomain name for the A record |
+| `CERTBOT_DOMAIN` | Domain to issue/renew the certificate for |
+| `CERTBOT_EMAIL` | Contact email for Let's Encrypt |
+
+**Optional**
+
+| Variable | Default | Description |
 |---|---|---|
-| `BUNNY_APIKEY` | Yes | BunnyCDN API key |
-| `BUNNY_APP_ID` | Yes | Magic Containers app ID |
-| `BUNNY_ZONEID` | Yes | DNS zone ID |
-| `BUNNY_RECORDID` | Yes | DNS record ID to update |
-| `DNS_SUBDOMAIN` | Yes | Subdomain name for the A record |
-
-**R2 certificate mount**
-
-| Variable | Required | Description |
-|---|---|---|
-| `R2_ACCOUNT_ID` | Yes | Cloudflare account ID |
-| `R2_ACCESS_KEY_ID` | Yes | R2 API token access key ID |
-| `R2_SECRET_ACCESS_KEY` | Yes | R2 API token secret access key |
-| `R2_BUCKET_NAME` | Yes | R2 bucket containing the cert files |
-| `R2_CERT_FILE` | No | Path to cert inside the bucket (default: `fullchain.pem`) |
-| `R2_KEY_FILE` | No | Path to key inside the bucket (default: `privkey.pem`) |
-
-**Certificate renewal via certbot**
-
-| Variable | Required | Description |
-|---|---|---|
-| `CERTBOT_DOMAIN` | Yes | Domain to issue/renew the certificate for |
-| `CERTBOT_EMAIL` | Yes | Contact email for Let's Encrypt notifications |
-| `CERTBOT_STAGING` | No | Set to any non-empty value to use the Let's Encrypt staging environment |
+| `S3_PROVIDER` | `Other` | rclone S3 provider (e.g. `Cloudflare`, `AWS`, `Minio`) |
+| `S3_CERT_FILE` | `fullchain.pem` | Cert filename in the bucket |
+| `S3_KEY_FILE` | `privkey.pem` | Key filename in the bucket |
+| `CERTBOT_STAGING` | — | Use Let's Encrypt staging if set |
+| `MOQ_WEB_HTTPS_LISTEN` | `[::]:443` | HTTPS listen address |
+| `MOQ_SERVER_BIND` | `[::]:443` | QUIC server bind address |
+| `MOQ_AUTH_PUBLIC` | _(empty)_ | Public path prefix; empty = fully public relay |
+| `RUST_LOG` | `debug` | Log level |
 
 > **DNS challenge:** Certbot uses the BunnyCDN DNS-01 challenge via `BUNNY_APIKEY` (shared with the DNS update step). No port 80 required.
 

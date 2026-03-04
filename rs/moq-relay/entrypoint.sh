@@ -1,9 +1,18 @@
 #!/bin/bash
 set -e
 
+# Defaults (can be overridden by environment)
+: "${MOQ_WEB_HTTPS_LISTEN:=[::]:443}"
+: "${MOQ_SERVER_BIND:=[::]:443}"
+: "${MOQ_AUTH_PUBLIC:=}"
+: "${RUST_LOG:=debug}"
+
+export MOQ_WEB_HTTPS_LISTEN MOQ_SERVER_BIND MOQ_AUTH_PUBLIC RUST_LOG
+
 echo "entrypoint: starting"
-echo "  R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-<unset>}"
-echo "  R2_BUCKET_NAME=${R2_BUCKET_NAME:-<unset>}"
+echo "  S3_ENDPOINT=${S3_ENDPOINT:-<unset>}"
+echo "  S3_BUCKET_NAME=${S3_BUCKET_NAME:-<unset>}"
+echo "  S3_PREFIX=${S3_PREFIX:-<unset>}"
 echo "  CERTBOT_DOMAIN=${CERTBOT_DOMAIN:-<unset>}"
 echo "  BUNNY_APIKEY=${BUNNY_APIKEY:+<set>}"
 
@@ -35,32 +44,37 @@ if [ -n "$BUNNY_APIKEY" ] && [ -n "$BUNNY_APP_ID" ] && [ -n "$BUNNY_ZONEID" ] &&
     fi
 fi
 
-# 2. Download TLS certs from R2 via rclone (no FUSE required).
-# Requires: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
-# Optional: R2_CERT_FILE (default: fullchain.pem), R2_KEY_FILE (default: privkey.pem)
-if [ -n "$R2_ACCOUNT_ID" ] && [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_BUCKET_NAME" ]; then
-    echo "entrypoint: entering R2 block"
+# 2. Download TLS certs from S3-compatible storage via rclone (no FUSE required).
+# Requires: S3_ENDPOINT, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, S3_BUCKET_NAME, S3_PREFIX
+# Optional: S3_CERT_FILE (default: fullchain.pem), S3_KEY_FILE (default: privkey.pem)
+if [ -n "$S3_ENDPOINT" ] && [ -n "$S3_ACCESS_KEY_ID" ] && [ -n "$S3_SECRET_ACCESS_KEY" ] && [ -n "$S3_BUCKET_NAME" ]; then
+    echo "entrypoint: entering S3 block"
     CERT_DIR="/certs"
     mkdir -p "$CERT_DIR"
+
+    if [ -z "$S3_PREFIX" ]; then
+        echo "ERROR: S3_PREFIX is required"
+        exit 1
+    fi
 
     # rclone handles both direct downloads (reads) and uploads (writes)
     mkdir -p /root/.config/rclone
     cat > /root/.config/rclone/rclone.conf <<EOF
-[r2]
+[s3]
 type = s3
-provider = Cloudflare
-access_key_id = ${R2_ACCESS_KEY_ID}
-secret_access_key = ${R2_SECRET_ACCESS_KEY}
-endpoint = https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+provider = ${S3_PROVIDER:-Other}
+access_key_id = ${S3_ACCESS_KEY_ID}
+secret_access_key = ${S3_SECRET_ACCESS_KEY}
+endpoint = ${S3_ENDPOINT}
 no_check_bucket = true
 EOF
 
-    CERT="${CERT_DIR}/${R2_CERT_FILE:-fullchain.pem}"
-    KEY="${CERT_DIR}/${R2_KEY_FILE:-privkey.pem}"
+    CERT="${CERT_DIR}/${S3_CERT_FILE:-fullchain.pem}"
+    KEY="${CERT_DIR}/${S3_KEY_FILE:-privkey.pem}"
 
-    echo "Downloading certs from R2: ${R2_BUCKET_NAME}"
-    rclone copyto "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}" "$CERT" 2>/dev/null || true
-    rclone copyto "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}" "$KEY" 2>/dev/null || true
+    echo "Downloading certs from S3: ${S3_BUCKET_NAME}/${S3_PREFIX}"
+    rclone copyto "s3:${S3_BUCKET_NAME}/${S3_PREFIX}/${S3_CERT_FILE:-fullchain.pem}" "$CERT" 2>/dev/null || true
+    rclone copyto "s3:${S3_BUCKET_NAME}/${S3_PREFIX}/${S3_KEY_FILE:-privkey.pem}" "$KEY" 2>/dev/null || true
 
     echo "--- certs (${CERT_DIR}) ---"
     ls -la "${CERT_DIR}/" 2>/dev/null || echo "  (not accessible)"
@@ -87,10 +101,10 @@ EOF
                 --email "$CERTBOT_EMAIL" \
                 --non-interactive --agree-tos
 
-            # Copy renewed certs back to R2 so all nodes pick them up
-            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "r2:${R2_BUCKET_NAME}/${R2_CERT_FILE:-fullchain.pem}"
-            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"   "r2:${R2_BUCKET_NAME}/${R2_KEY_FILE:-privkey.pem}"
-            echo "Renewed certs written to R2."
+            # Copy renewed certs back to S3 so all nodes pick them up
+            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/fullchain.pem" "s3:${S3_BUCKET_NAME}/${S3_PREFIX}/${S3_CERT_FILE:-fullchain.pem}"
+            rclone copyto -L "${CERTBOT_DIR}/live/${CERTBOT_DOMAIN}/privkey.pem"   "s3:${S3_BUCKET_NAME}/${S3_PREFIX}/${S3_KEY_FILE:-privkey.pem}"
+            echo "Renewed certs written to S3."
         else
             echo "Cert is valid for more than 30 days, skipping renewal."
         fi
