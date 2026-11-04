@@ -6,8 +6,6 @@ permissions:
 
 on:
   workflow_dispatch: # Allow manual triggering
-  schedule:
-    - cron: '0 12 1 * *' # Run monthly on the 1st at noon UTC
 
 jobs:
   update-flake:

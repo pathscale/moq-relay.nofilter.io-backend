@@ -1,9 +1,6 @@
 name: Docker
 
 on:
-  push:
-    tags:
-      - 'moq-relay-v*'
   workflow_dispatch:
 
 jobs:
