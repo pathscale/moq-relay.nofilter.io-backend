@@ -36,3 +36,4 @@ yarn.lock
 pnpm-lock.yaml
 
 docker-compose.yml
+Cargo.lock
